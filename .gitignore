@@ -5,8 +5,3 @@ __pycache__/
 nltk_data/
 data/
 *.zip
-outputs/tfidf_matrix.json
-
-
-
-

@@ -46,6 +46,7 @@ The codebase is modularized into single-responsibility components inside the `pa
   - **Task 2 (BM25 Okapi):** Vectorized sparse matrix formulation ($S = Q \cdot M^T$) with $k_1 = 1.5$ and $b = 0.75$, scoring and ranking top-5 candidates while strictly excluding self-retrieval.
 - `patient_similarity/evaluation.py`: Computes per-patient Precision@5 and Recall@5 against the `similar_patients` ground truth (treating relevance 1 and 2 equally), handles undefined recall for patients without ground truth, and calculates TF-IDF vs. BM25 Jaccard overlap.
 - `patient_similarity/io_utils.py`: Serializes outputs into Python-loadable JSON formats (including direct-lookup sparse TF-IDF dictionary).
+- `patient_similarity/tfidf_store.py`: Writes the Task 1 TF-IDF matrix as size-bounded JSON shards (each below GitHub's 100 MB limit) with a lookup manifest, and provides `load_tfidf()` for `matrix[patient_uid][term]` access.
 - `patient_similarity/report.py`: Programmatically generates a 3-page academic and clinical evaluation report in PDF format with running headers and page numbering.
 - `patient_similarity/pipeline.py`: Orchestrates the end-to-end execution flow.
 
@@ -56,7 +57,12 @@ The codebase is modularized into single-responsibility components inside the `pa
 Running the command produces three required output files in `outputs/` and a comprehensive PDF report in `reports/`:
 
 1. **`outputs/tfidf_matrix.json` (Task 1):**  
-   Dictionary format directly loadable in Python (`json.load(open("outputs/tfidf_matrix.json"))`). Term weights can be accessed via `tfidf_data[patient_uid][term]`. Unstored terms have an implicit weight of zero.
+   The TF-IDF matrix for all 167,034 patients. Formatted as a single JSON dictionary mapping each `patient_uid` to its significant terms and weights (`{term: weight}`, zero weights omitted):
+   ```python
+   import json
+   tfidf = json.load(open("outputs/tfidf_matrix.json"))
+   tfidf["1065068-1"]["meningitis"]          # 0.3067
+   ```
 2. **`outputs/top5_similar_patients.json` (Task 2):**  
    Dictionary where each key is a `patient_uid`, mapping to its `patient_id` and ranked top-5 lists for `tfidf` and `bm25`:
    ```json
