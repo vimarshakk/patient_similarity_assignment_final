@@ -72,6 +72,10 @@ def preprocess_text(value):
     if not _INITIALIZED:
         _init()
     s = str(value).lower()
+    # The PMC-Patients JSON stores line breaks as the literal text "\n", so they
+    # survive punctuation removal and glue an "n" onto the next word
+    # ("...\nfailure" -> "nfailure"). Clear the escape sequences first.
+    s = re.sub(r"\\[nrt]+", " ", s)
     s = re.sub(r"https?://\S+|www\.\S+", " ", s)
     s = re.sub(r"\b\d+(?:\.\d+)?\b", " ", s)
     s = s.translate(str.maketrans({c: " " for c in string.punctuation}))

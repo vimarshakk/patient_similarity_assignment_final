@@ -185,8 +185,10 @@ def create_report(path, stats, docstats, lemma, summary):
     )
     story.append(
         Paragraph(
-            "• <b>Case Standardization & Link Stripping:</b> Converted all text to lower case and eliminated web URLs "
-            "and electronic hyperlinks via regular expressions (<code>re.sub</code>).<br/>"
+            "• <b>Case Standardization & Link Stripping:</b> Converted all text to lower case, eliminated web URLs "
+            "and electronic hyperlinks via regular expressions (<code>re.sub</code>), and cleared the literal escape "
+            "sequences (<code>\\n</code>, <code>\\t</code>) stored in the source JSON, which would otherwise fuse a stray "
+            "'n' onto the next token (e.g. 'nfailure').<br/>"
             "• <b>Numeric & Identifier Filtering:</b> Stripped isolated numeric sequences, lab quantities, and dosage digits "
             "to prevent incidental matching on unrelated patient ages, lab thresholds, or telephone numbers.<br/>"
             "• <b>Punctuation Stripping:</b> Removed all standard punctuation characters using high-speed translation tables "
@@ -235,8 +237,11 @@ def create_report(path, stats, docstats, lemma, summary):
             "is twenty times more relevant than a note mentioning it three times; logarithmic dampening prevents term over-saturation.<br/>"
             "3. <b>Euclidean L2 Normalization (<code>norm='l2'</code>):</b> Rescales each document vector to unit length. This normalizes "
             "for narrative verbosity and enables cosine similarity to be computed directly via inner dot products.<br/>"
-            "<b>Output Serialization:</b> The resulting TF-IDF matrices are stored in a direct-lookup JSON dictionary format "
-            "<code>{patient_uid: {term: weight}}</code>, omitting zero weights for compact storage and sub-millisecond lookup in Python.",
+            "<b>Output Serialization:</b> The complete TF-IDF matrix is stored as a direct-lookup JSON dictionary "
+            "<code>{patient_uid: {term: weight}}</code> with zero weights omitted. Because the full matrix exceeds GitHub's "
+            "100 MB per-file limit, it is written as size-bounded shards (<code>outputs/tfidf_matrix/part-NNNN.json</code>) "
+            "plus a <code>manifest.json</code> that indexes patient_uid to shard; <code>load_tfidf()</code> reads a single shard "
+            "so lookups stay fast and no term weights are lost.",
             body_style,
         )
     )
@@ -312,11 +317,12 @@ def create_report(path, stats, docstats, lemma, summary):
         ["Retrieval Method", "Average P@5", "Average R@5", "Evaluated Cohort (N)", "Excluded (No GT)"],
     ]
     metrics = summary.get("metrics", {})
-    for m_name in ("tfidf", "bm25"):
+    method_names = list(metrics)
+    excluded_count = summary.get("patients_with_no_ground_truth_excluded_from_average_recall_5", 0)
+    for m_name in method_names:
         m_vals = metrics.get(m_name, {})
         p5 = m_vals.get("average_precision_5")
         r5 = m_vals.get("average_recall_5")
-        n_p = m_vals.get("precision_patients_count", n_loaded)
         n_r = m_vals.get("recall_patients_count", 0)
         p5_str = f"{p5:.4f}" if p5 is not None else "N/A"
         r5_str = f"{r5:.4f}" if r5 is not None else "N/A"
@@ -325,7 +331,7 @@ def create_report(path, stats, docstats, lemma, summary):
             p5_str,
             r5_str,
             f"{n_r:,} patients",
-            f"{summary.get('patients_with_no_ground_truth_excluded_from_average_recall', 0):,}",
+            f"{excluded_count:,}",
         ])
 
     results_table = Table(table_data, colWidths=[1.4 * inch, 1.3 * inch, 1.3 * inch, 1.5 * inch, 1.3 * inch])
@@ -342,26 +348,28 @@ def create_report(path, stats, docstats, lemma, summary):
     story.append(results_table)
     story.append(Spacer(1, 6))
 
-    jaccard_overlap = summary.get("average_top5_jaccard_overlap_tfidf_bm25")
-    jaccard_str = f"{jaccard_overlap:.4f}" if jaccard_overlap is not None else "N/A"
+    overlaps = summary.get("average_top5_jaccard_overlap", {})
+    first_overlap = next((v for v in overlaps.values() if v is not None), None)
+    jaccard_str = f"{first_overlap:.4f}" if first_overlap is not None else "N/A"
     story.append(
         Paragraph(
-            f"<b>Recommendation Overlap Analysis:</b> The mean Jaccard overlap between the top 5 sets produced by TF-IDF and BM25 was "
-            f"<b>{jaccard_str}</b>. This indicates substantial concordance on the core diagnostic terms, with divergence occurring in "
+            f"<b>Recommendation Overlap Analysis:</b> The mean Jaccard overlap between the top 5 sets produced by the two methods was "
+            f"<b>{jaccard_str}</b>. This indicates substantial concordance on the core diagnostic vocabulary, with divergence occurring in "
             f"cases where BM25's length normalization promoted shorter, highly specific case notes over lengthy multi-morbid summaries.",
             body_style,
         )
     )
 
     story.append(Paragraph("7. Translation for Healthcare Clinicians & Administrators", h1_style))
-    p5_val = metrics.get("tfidf", {}).get("average_precision_5", 0.152)
-    r5_val = metrics.get("tfidf", {}).get("average_recall_5", 0.462)
+    best_method = max(method_names, key=lambda m: metrics[m].get("average_precision_5") or 0.0)
+    p5_val = metrics[best_method].get("average_precision_5") or 0.0
+    r5_val = metrics[best_method].get("average_recall_5") or 0.0
     story.append(
         Paragraph(
             "For non-technical hospital administrators and practicing physicians, these numerical metrics translate to direct clinical realities:<br/>"
             f"• <b>Interpreting Precision@5 ({p5_val:.1%}):</b> When a physician queries an index patient, the search engine recommends "
-            f"five historical cases. A Precision@5 of {p5_val:.1%} means that, across all queries, approximately one out of every six recommended "
-            "cases is an established, clinically verified diagnostic match. In clinical decision support, surfacing even a single confirmed historical match "
+            f"five historical cases. A Precision@5 of {p5_val:.1%} means that, across all queries, roughly {p5_val * 5:.1f} of those five "
+            "recommendations is an established, clinically verified match. In clinical decision support, surfacing even a single confirmed historical match "
             "within the top five suggestions provides rapid bedside confirmation of rare presentations while requiring less than two minutes of clinician review.<br/>"
             f"• <b>Interpreting Recall@5 ({r5_val:.1%}):</b> Recall measures broad database coverage. A Recall@5 of {r5_val:.1%} demonstrates that "
             "nearly half of all relevant patient cases existing across the entire medical archive are successfully captured within just the top five slots. "
@@ -374,12 +382,16 @@ def create_report(path, stats, docstats, lemma, summary):
     story.append(Paragraph("8. Operational Recommendations & Next Steps", h1_style))
     story.append(
         Paragraph(
-            "1. <b>Clinical Deployment:</b> Deploy BM25 as the primary keyword engine due to its superior resilience against document "
-            "length variation. Present the top 5 matches with matched term highlights to enable rapid clinician triage.<br/>"
+            f"1. <b>Clinical Deployment:</b> Deploy {best_method.upper()} as the primary retrieval engine: it achieved the higher "
+            f"Precision@5 ({p5_val:.4f}) and Recall@5 ({r5_val:.4f}) on this corpus, so its recommendations contain the most verified "
+            "matches per five results. Present the top 5 matches with matched term highlights to enable rapid clinician triage. "
+            "BM25 remains a useful secondary ranking signal because its length normalization favours shorter, highly specific "
+            "case notes.<br/>"
             "2. <b>Future Dense Embeddings:</b> Transition toward bi-encoder neural models (e.g., PubMedBERT, BioBERT) to resolve "
             "lexical mismatch and capture semantic clinical synonyms that lexical models overlook.<br/>"
             "3. <b>Reproducibility:</b> The complete pipeline executes deterministically via: "
-            "<code>python main.py PATH_TO_INPUT_DATA_FOLDER</code>, outputting all required JSON and PDF deliverables.",
+            "<code>python main.py PATH_TO_INPUT_DATA_FOLDER</code>, outputting all required JSON and PDF deliverables. "
+            "The full TF-IDF matrix is written as JSON shards under <code>outputs/tfidf_matrix/</code>.",
             body_style,
         )
     )

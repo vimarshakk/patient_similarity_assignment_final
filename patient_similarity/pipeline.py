@@ -5,8 +5,20 @@ from .data_loader import load_patients
 from .preprocessing import preprocess_text, lemmatization_mode
 from .retrieval import build_tfidf, build_bm25, retrieve_tfidf, retrieve_bm25
 from .evaluation import evaluate
-from .io_utils import save_json, save_tfidf_json
+from .io_utils import save_json
 from .report import create_report
+from .tfidf_store import save_tfidf_matrix
+
+
+def preprocess_all(raw_texts, log_every=20000):
+    """Preprocess every document, reporting progress on large corpora."""
+    texts = []
+    total = len(raw_texts)
+    for index, text in enumerate(raw_texts, start=1):
+        texts.append(preprocess_text(text))
+        if log_every and index % log_every == 0:
+            print(f"      preprocessed {index:,}/{total:,} documents")
+    return texts
 
 
 def run_pipeline(input_folder, output_folder, report_folder, top_k=5, max_features=None):
@@ -22,7 +34,7 @@ def run_pipeline(input_folder, output_folder, report_folder, top_k=5, max_featur
     print(f"Loaded {len(patients)} unique patient records.")
 
     print("2/6 Preprocessing clinical text...")
-    texts = [preprocess_text(text) for text in raw_texts]
+    texts = preprocess_all(raw_texts)
     token_counts = [len(text.split()) for text in texts]
     text_stats = {
         "average": statistics.mean(token_counts) if token_counts else 0,
@@ -32,11 +44,17 @@ def run_pipeline(input_folder, output_folder, report_folder, top_k=5, max_featur
 
     print("3/6 Building TF-IDF matrix...")
     tfidf_matrix, vectorizer = build_tfidf(texts, max_features=max_features)
-    save_tfidf_json(
-        output_folder / "tfidf_matrix.json",
+    print(f"  - Matrix shape: {tfidf_matrix.shape[0]:,} patients x {tfidf_matrix.shape[1]:,} terms")
+    tfidf_manifest = save_tfidf_matrix(
+        output_folder / "tfidf_matrix",
         tfidf_matrix,
         patient_uids,
         vectorizer,
+    )
+    print(
+        f"  - Saved {tfidf_manifest['patient_count']:,} patients x "
+        f"{tfidf_manifest['term_count']:,} terms in "
+        f"{tfidf_manifest['shard_count']} JSON shard(s)."
     )
 
     print("4/6 Retrieving top 5 patients using TF-IDF and BM25...")
@@ -82,10 +100,10 @@ def run_pipeline(input_folder, output_folder, report_folder, top_k=5, max_featur
         )
     print(
         "Patients excluded from average recall:",
-        summary["patients_with_no_ground_truth_excluded_from_average_recall"],
+        summary["patients_with_no_ground_truth_excluded_from_average_recall_5"],
     )
     print("\nRequired output files:")
-    print("1. outputs/tfidf_matrix.json")
+    print("1. outputs/tfidf_matrix/  (manifest.json + part-NNNN.json shards)")
     print("2. outputs/top5_similar_patients.json")
     print("3. outputs/evaluation_per_patient.json")
     print("Report: reports/patient_similarity_report.pdf")

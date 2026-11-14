@@ -2,6 +2,11 @@
 __pycache__/
 *.pyc
 .DS_Store
-nltk_data/
 data/
 *.zip
+
+# Bundle only the WordNet corpus needed for lemmatization; skip tokenizers and archives.
+nltk_data/*
+!nltk_data/corpora/
+nltk_data/corpora/*
+!nltk_data/corpora/wordnet/
